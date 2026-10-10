@@ -1,0 +1,1284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0f14" media="(prefers-color-scheme: dark)">
+<title>色度抠图 · 透明 GIF 生成器</title>
+<style>
+  :root {
+    --bg: #f4f6fa; --bg-panel: #ffffff; --bg-input: #eef1f6;
+    --border: #dce3ec; --border-strong: #c5cfdd;
+    --text: #1a2230; --text-dim: #5b6b80; --text-faint: #8a99ad;
+    --primary: #3b6cff; --primary-hover: #2a5bee;
+    --primary-shadow: rgba(59,108,255,0.25);
+    --danger: #e5484d; --success: #2f9e6e;
+    --warn-bg: #fff5e6; --warn-border: #ffd8a8; --warn-text: #b45309;
+    --checker-a: #e8ecf2; --checker-b: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0f14; --bg-panel: #131920; --bg-input: #1f2a36;
+      --border: #1f2a36; --border-strong: #2f3c4b;
+      --text: #e4edf8; --text-dim: #b7c3d3; --text-faint: #7d8ea3;
+      --primary: #4c7cff; --primary-hover: #3d6af0;
+      --primary-shadow: rgba(76,124,255,0.35);
+      --danger: #ff7b7b; --success: #5ad19a;
+      --warn-bg: #2a1f1f; --warn-border: #4a2a2a; --warn-text: #ff9b9b;
+      --checker-a: #2a333f; --checker-b: #1a222c;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+      min-height: 100vh; min-height: 100dvh; transition: background 0.2s, color 0.2s;
+      overscroll-behavior: none; }
+  body { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+
+  .header { padding: 16px 16px 8px; max-width: 680px; margin: 0 auto; }
+  .header h1 { font-size: 1.25rem; font-weight: 700; margin: 0 0 4px;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap; letter-spacing: -0.3px; }
+  .header h1 .tag { background: var(--primary); color: #fff; font-size: 0.65rem;
+      padding: 3px 9px; border-radius: 20px; font-weight: 600; letter-spacing: 0.3px; }
+  .header p { color: var(--text-faint); font-size: 0.78rem; margin: 0; line-height: 1.5; }
+
+  .main { padding: 8px 16px 28px; display: flex; flex-direction: column;
+      gap: 14px; max-width: 680px; margin: 0 auto; width: 100%; }
+
+  .preview-wrap {
+    border-radius: 18px; padding: 8px; border: 1px solid var(--border);
+    background-color: var(--preview-bg, var(--checker-b));
+    background-image: var(--preview-bg-image, 
+      linear-gradient(45deg, var(--checker-a) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--checker-a) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--checker-a) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--checker-a) 75%));
+    background-size: var(--preview-bg-size, 18px 18px);
+    background-position: var(--preview-bg-pos, 0 0, 0 9px, 9px -9px, -9px 0px);
+    transition: background-color 0.2s; position: relative;
+  }
+
+  /* 预览框：宽高由 JS 动态设置 aspect-ratio，跟随输出尺寸比例 */
+  .canvas-box {
+    position: relative; width: 100%;
+    border-radius: 12px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    background-color: var(--preview-inner-bg, transparent);
+    touch-action: none; cursor: grab; user-select: none;
+    aspect-ratio: 1 / 1; /* 默认正方形，JS 会改 */
+    max-height: 70vh;
+    margin: 0 auto;
+  }
+  .canvas-box.dragging { cursor: grabbing; }
+
+  #previewCanvas {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .preview-hint { position: absolute; inset: 0; display: flex;
+      align-items: center; justify-content: center; color: var(--text-faint);
+      font-size: 0.85rem; pointer-events: none; text-align: center; padding: 20px; }
+
+  .zoom-badge {
+    position: absolute; top: 8px; right: 8px;
+    background: rgba(0, 0, 0, 0.65); color: #fff;
+    font-size: 0.72rem; padding: 4px 10px; border-radius: 12px;
+    font-variant-numeric: tabular-nums; font-weight: 600;
+    pointer-events: none; opacity: 0; transition: opacity 0.3s;
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  }
+  .zoom-badge.show { opacity: 1; }
+
+  .zoom-controls {
+    position: absolute; bottom: 8px; right: 8px;
+    display: flex; gap: 6px; z-index: 5;
+  }
+  .zoom-btn {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: rgba(0, 0, 0, 0.6); color: #fff;
+    border: none; font-size: 1rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    transition: background 0.15s, transform 0.1s;
+    padding: 0; font-weight: 700;
+  }
+  .zoom-btn:active { background: rgba(0, 0, 0, 0.85); transform: scale(0.92); }
+
+  .file-btn { display: flex; align-items: center; justify-content: center;
+      gap: 10px; background: var(--primary); color: #fff; padding: 16px;
+      border-radius: 16px; font-size: 1rem; font-weight: 600;
+      cursor: pointer; border: none; width: 100%;
+      box-shadow: 0 6px 16px var(--primary-shadow);
+      position: relative; overflow: hidden;
+      transition: background 0.15s, transform 0.1s; }
+  .file-btn:active { background: var(--primary-hover); transform: scale(0.985); }
+  .file-btn input[type="file"] { position: absolute; inset: 0; width: 100%;
+      height: 100%; opacity: 0; cursor: pointer; font-size: 100px; }
+
+  .status { font-size: 0.8rem; color: var(--text-faint); text-align: center;
+      line-height: 1.5; min-height: 18px; transition: color 0.2s; }
+  .status.error { color: var(--danger); }
+  .status.ok { color: var(--success); }
+
+  .panel { background: var(--bg-panel); border: 1px solid var(--border);
+      border-radius: 18px; padding: 16px; display: flex;
+      flex-direction: column; gap: 16px; }
+
+  .section-title { font-size: 0.75rem; color: var(--text-faint);
+      text-transform: uppercase; letter-spacing: 0.8px;
+      font-weight: 700; margin: 0 0 -4px 0; }
+
+  .color-section { display: flex; align-items: center; gap: 12px; }
+  .color-swatch { width: 52px; height: 52px; border-radius: 12px;
+      border: 2px solid var(--border-strong); flex-shrink: 0;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); }
+  .color-info { flex: 1; display: flex; flex-direction: column;
+      gap: 8px; min-width: 0; }
+  .color-info .hex { font-size: 0.85rem; color: var(--text-dim);
+      font-weight: 500; font-variant-numeric: tabular-nums; }
+  .color-info .hex strong { color: var(--text); font-weight: 600; }
+  .preset-colors { display: flex; gap: 8px; }
+  .preset-btn { width: 36px; height: 36px; border-radius: 10px;
+      border: 2px solid var(--border-strong); cursor: pointer;
+      padding: 0; flex-shrink: 0; transition: transform 0.1s, border-color 0.15s; }
+  .preset-btn:active { transform: scale(0.9); border-color: var(--primary); }
+  #chromaColor { display: none; }
+
+  .slider-row { display: flex; flex-direction: column; gap: 8px; }
+  .slider-label { display: flex; justify-content: space-between;
+      font-size: 0.82rem; color: var(--text-dim); font-weight: 500; }
+  .slider-label .val { color: var(--primary); font-weight: 700;
+      font-variant-numeric: tabular-nums; }
+  input[type="range"] { -webkit-appearance: none; appearance: none;
+      width: 100%; height: 36px; background: transparent; margin: 0; padding: 0; }
+  input[type="range"]::-webkit-slider-runnable-track {
+      height: 8px; background: var(--bg-input); border-radius: 8px; }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 28px; height: 28px;
+    background: var(--primary); border: 3px solid #fff;
+    border-radius: 50%; margin-top: -10px; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+  input[type="range"]::-moz-range-track {
+    height: 8px; background: var(--bg-input); border-radius: 8px; }
+  input[type="range"]::-moz-range-thumb {
+    width: 22px; height: 22px; background: var(--primary);
+    border: 3px solid #fff; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+
+  .row { display: flex; align-items: center; gap: 10px;
+      font-size: 0.82rem; color: var(--text-dim); flex-wrap: wrap; }
+  .row select, .row input[type="number"] {
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: 10px;
+    padding: 10px 12px; font-size: 0.88rem; font-family: inherit; }
+  .row select { flex: 1; min-width: 120px; }
+  .row input[type="number"] { width: 84px; }
+  .row .hint { color: var(--text-faint); font-size: 0.74rem; }
+
+  .size-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .size-row label { font-size: 0.82rem; color: var(--text-dim); font-weight: 500; }
+  .size-row input[type="number"] {
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: 10px;
+    padding: 10px 8px; font-size: 0.9rem; font-family: inherit;
+    width: 90px; text-align: center; font-variant-numeric: tabular-nums;
+  }
+  .size-row .x { color: var(--text-faint); font-weight: 600; }
+  .lock-btn { width: 40px; height: 40px; border-radius: 10px;
+      border: 1px solid var(--border-strong); background: var(--bg-input);
+      color: var(--text-dim); cursor: pointer; font-size: 1rem;
+      display: flex; align-items: center; justify-content: center;
+      padding: 0; flex-shrink: 0; transition: all 0.15s; }
+  .lock-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .lock-btn:active { transform: scale(0.95); }
+
+  .size-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .size-preset { background: var(--bg-input); color: var(--text-dim);
+      border: 1px solid var(--border-strong); border-radius: 8px;
+      padding: 6px 10px; font-size: 0.72rem; cursor: pointer;
+      font-family: inherit; font-variant-numeric: tabular-nums; transition: all 0.15s; }
+  .size-preset:active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+  .toggle-row { display: flex; align-items: center; gap: 10px;
+      font-size: 0.85rem; color: var(--text-dim); line-height: 1.4; }
+  .toggle-row input[type="checkbox"] { width: 20px; height: 20px;
+      accent-color: var(--primary); flex-shrink: 0; }
+
+  .warn-box { background: var(--warn-bg); border: 1px solid var(--warn-border);
+      color: var(--warn-text); font-size: 0.78rem; padding: 10px 12px;
+      border-radius: 12px; line-height: 1.5; }
+
+  .actions { display: flex; flex-direction: column; gap: 10px; }
+  .btn { width: 100%; padding: 16px; border-radius: 16px; border: none;
+      font-size: 1rem; font-weight: 600; cursor: pointer;
+      transition: background 0.15s, transform 0.1s, opacity 0.15s;
+      display: flex; align-items: center; justify-content: center;
+      gap: 8px; font-family: inherit; }
+  .btn:active:not(:disabled) { transform: scale(0.985); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-secondary { background: var(--bg-input); color: var(--text);
+      border: 1px solid var(--border-strong); }
+  .btn-secondary:active:not(:disabled) { background: var(--border-strong); }
+  .btn-primary { background: var(--primary); color: #fff;
+      box-shadow: 0 6px 16px var(--primary-shadow); }
+  .btn-primary:active:not(:disabled) { background: var(--primary-hover); }
+
+  .progress-bar { width: 100%; height: 8px; background: var(--bg-input);
+      border-radius: 8px; overflow: hidden; display: none; }
+  .progress-bar.show { display: block; }
+  .progress-fill { height: 100%; background: var(--primary);
+      width: 0%; transition: width 0.15s; border-radius: 8px; }
+
+  .frame-info { font-size: 0.78rem; color: var(--text-faint);
+      text-align: center; line-height: 1.5; }
+
+  video { display: none; }
+
+  .bg-options { display: flex; gap: 8px; flex-wrap: wrap; }
+  .bg-opt { width: 42px; height: 42px; border-radius: 10px;
+      border: 2px solid var(--border-strong); cursor: pointer;
+      padding: 0; position: relative; overflow: hidden;
+      transition: transform 0.1s, border-color 0.15s; flex-shrink: 0; }
+  .bg-opt:active { transform: scale(0.92); }
+  .bg-opt.selected { border-color: var(--primary);
+      box-shadow: 0 0 0 2px var(--primary-shadow); }
+  .bg-opt[data-bg="checker"] {
+      background-color: #ffffff;
+      background-image:
+        linear-gradient(45deg, #c0c8d4 25%, transparent 25%),
+        linear-gradient(-45deg, #c0c8d4 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #c0c8d4 75%),
+        linear-gradient(-45deg, transparent 75%, #c0c8d4 75%);
+      background-size: 10px 10px;
+      background-position: 0 0, 0 5px, 5px -5px, -5px 0px;
+  }
+  .bg-opt[data-bg="white"] { background: #ffffff; }
+  .bg-opt[data-bg="black"] { background: #000000; }
+  .bg-opt[data-bg="green"] { background: #00b140; }
+  .bg-opt[data-bg="blue"] { background: #0066ff; }
+  .bg-opt[data-bg="magenta"] { background: #ff00ff; }
+  .bg-opt[data-bg="custom"] {
+      background: linear-gradient(135deg, #ff6b6b, #ffd93d, #6bcb77, #4d96ff);
+  }
+
+  @media (min-width: 720px) {
+    .main { max-width: 1100px; display: grid;
+        grid-template-columns: 1.4fr 1fr; align-items: start; gap: 20px; }
+    .preview-wrap { grid-column: 1; grid-row: 1 / span 4;
+        position: sticky; top: 20px; }
+    .file-btn { grid-column: 2; grid-row: 1; }
+    .status { grid-column: 2; grid-row: 2; }
+    .panel { grid-column: 2; grid-row: 3; }
+    .actions { grid-column: 2; grid-row: 4; }
+    .frame-info { grid-column: 2; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>⚡ 色度抠图 <span class="tag">透明 GIF</span></h1>
+  <p>预览框跟随尺寸比例 · 放大后导出即为放大画面</p>
+</div>
+
+<div class="main">
+  <div class="preview-wrap" id="previewWrap">
+    <div class="canvas-box" id="canvasBox">
+      <canvas id="previewCanvas" width="640" height="640"></canvas>
+      <div class="preview-hint" id="previewHint">上传视频后显示预览</div>
+      <div class="zoom-badge" id="zoomBadge">100%</div>
+      <div class="zoom-controls">
+        <button class="zoom-btn" id="zoomOutBtn" title="缩小">−</button>
+        <button class="zoom-btn" id="zoomResetBtn" title="重置">⊙</button>
+        <button class="zoom-btn" id="zoomInBtn" title="放大">+</button>
+      </div>
+    </div>
+  </div>
+
+  <label class="file-btn" for="videoInput">
+    📁 选择视频文件
+    <input type="file" id="videoInput" accept="video/*">
+  </label>
+
+  <div class="status" id="statusMsg">等待导入视频…</div>
+  <div class="frame-info" id="frameInfo"></div>
+
+  <div class="panel">
+    <div class="section-title">抠像设置</div>
+
+    <div class="color-section">
+      <div class="color-swatch" id="colorSwatch" style="background:#00ff00;"></div>
+      <div class="color-info">
+        <div class="hex">抠像颜色 <strong id="hexLabel">#00FF00</strong></div>
+        <div class="preset-colors">
+          <button class="preset-btn" data-color="#00ff00" style="background:#00ff00;" title="绿幕"></button>
+          <button class="preset-btn" data-color="#0000ff" style="background:#0000ff;" title="蓝幕"></button>
+          <button class="preset-btn" data-color="#ffffff" style="background:#ffffff;" title="白底"></button>
+          <button class="preset-btn" data-color="#000000" style="background:#000000;" title="黑底"></button>
+        </div>
+      </div>
+      <input type="color" id="chromaColor" value="#00ff00">
+    </div>
+
+    <div class="slider-row">
+      <div class="slider-label">
+        <span>⚖️ 相似度（抠除范围）</span>
+        <span class="val" id="simVal">0.30</span>
+      </div>
+      <input type="range" id="similarity" min="0.05" max="1.0" step="0.01" value="0.3">
+    </div>
+
+    <div class="slider-row">
+      <div class="slider-label">
+        <span>🌫️ 边缘平滑</span>
+        <span class="val" id="smoothVal">0.05</span>
+      </div>
+      <input type="range" id="smoothness" min="0.0" max="0.5" step="0.01" value="0.05">
+    </div>
+
+    <div class="section-title" style="margin-top:4px;">预览背景（仅预览，不影响导出）</div>
+
+    <div class="bg-options" id="bgOptions">
+      <button class="bg-opt selected" data-bg="checker" title="棋盘格（透明）"></button>
+      <button class="bg-opt" data-bg="white" title="白色"></button>
+      <button class="bg-opt" data-bg="black" title="黑色"></button>
+      <button class="bg-opt" data-bg="green" title="绿幕"></button>
+      <button class="bg-opt" data-bg="blue" title="蓝幕"></button>
+      <button class="bg-opt" data-bg="magenta" title="洋红"></button>
+      <button class="bg-opt" data-bg="custom" title="自定义颜色" id="customBgBtn"></button>
+      <input type="color" id="customBgColor" value="#ff6b6b" style="display:none;">
+    </div>
+
+    <div class="section-title" style="margin-top:4px;">输出尺寸（等比例缩放）</div>
+
+    <div class="size-row">
+      <label>宽</label>
+      <input type="number" id="widthInput" min="8" max="4000" value="150" step="1">
+      <span class="x">×</span>
+      <label>高</label>
+      <input type="number" id="heightInput" min="8" max="4000" value="150" step="1">
+      <button class="lock-btn" id="lockRatioBtn" title="锁定比例">🔓</button>
+    </div>
+
+    <div class="size-presets">
+      <button class="size-preset" data-w="150" data-h="150">150×150</button>
+      <button class="size-preset" data-w="200" data-h="200">200×200</button>
+      <button class="size-preset" data-w="240" data-h="240">240×240</button>
+      <button class="size-preset" data-w="320" data-h="320">320×320</button>
+      <button class="size-preset" data-w="512" data-h="512">512×512</button>
+      <button class="size-preset" data-w="0" data-h="0" id="resetSizeBtn">原始尺寸</button>
+    </div>
+
+    <div class="hint" style="font-size:0.74rem; color:var(--text-faint); margin-top:-4px; line-height:1.5;">
+      🔒 锁定时改宽自动按原始比例算高<br>
+      🔓 解锁可指定任意宽高，画面按原始比例<span style="color:var(--primary); font-weight:600;">居中缩放</span>，多余部分透明
+    </div>
+
+    <div class="section-title" style="margin-top:4px;">GIF 参数</div>
+
+    <div class="row">
+      <span>🎞️ 采样帧率</span>
+      <select id="fpsSelect">
+        <option value="5">5 fps</option>
+        <option value="8">8 fps</option>
+        <option value="10" selected>10 fps</option>
+        <option value="12">12 fps</option>
+        <option value="15">15 fps</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <span>🎬 最大帧数</span>
+      <select id="maxFramesSelect">
+        <option value="24">24 帧</option>
+        <option value="36">36 帧</option>
+        <option value="48" selected>48 帧</option>
+        <option value="72">72 帧</option>
+        <option value="0">不限制</option>
+      </select>
+    </div>
+
+    <div class="toggle-row">
+      <input type="checkbox" id="ditherChk">
+      <label for="ditherChk">启用抖动（颜色过渡更自然，编码慢，手机建议关闭）</label>
+    </div>
+
+    <div class="row">
+      <span>🎨 透明容差</span>
+      <input type="number" id="alphaThreshold" value="128" min="0" max="255" step="1">
+      <span class="hint">低于此 Alpha 变透明</span>
+    </div>
+
+    <div class="warn-box" id="warnBox" style="display:none;"></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-secondary" id="playPauseBtn" disabled>▶ 播放透明预览</button>
+    <button class="btn btn-primary" id="exportBtn" disabled>🎬 合成透明 GIF 并下载</button>
+    <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="status" id="exportStatus"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
+<script>
+(function() {
+  'use strict';
+
+  const previewWrap = document.getElementById('previewWrap');
+  const canvasBox = document.getElementById('canvasBox');
+  const canvas = document.getElementById('previewCanvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const previewHint = document.getElementById('previewHint');
+  const zoomBadge = document.getElementById('zoomBadge');
+  const zoomInBtn = document.getElementById('zoomInBtn');
+  const zoomOutBtn = document.getElementById('zoomOutBtn');
+  const zoomResetBtn = document.getElementById('zoomResetBtn');
+  const videoInput = document.getElementById('videoInput');
+  const chromaColorInput = document.getElementById('chromaColor');
+  const colorSwatch = document.getElementById('colorSwatch');
+  const hexLabel = document.getElementById('hexLabel');
+  const similaritySlider = document.getElementById('similarity');
+  const simVal = document.getElementById('simVal');
+  const smoothnessSlider = document.getElementById('smoothness');
+  const smoothVal = document.getElementById('smoothVal');
+  const widthInput = document.getElementById('widthInput');
+  const heightInput = document.getElementById('heightInput');
+  const lockRatioBtn = document.getElementById('lockRatioBtn');
+  const fpsSelect = document.getElementById('fpsSelect');
+  const maxFramesSelect = document.getElementById('maxFramesSelect');
+  const ditherChk = document.getElementById('ditherChk');
+  const alphaThreshold = document.getElementById('alphaThreshold');
+  const playPauseBtn = document.getElementById('playPauseBtn');
+  const exportBtn = document.getElementById('exportBtn');
+  const statusMsg = document.getElementById('statusMsg');
+  const frameInfo = document.getElementById('frameInfo');
+  const exportStatus = document.getElementById('exportStatus');
+  const progressBar = document.getElementById('progressBar');
+  const progressFill = document.getElementById('progressFill');
+  const warnBox = document.getElementById('warnBox');
+  const customBgColor = document.getElementById('customBgColor');
+  const customBgBtn = document.getElementById('customBgBtn');
+
+  let video = null;
+  let isPlaying = false;
+  let animationFrameId = null;
+  let sourceLoaded = false;
+  let videoW = 640, videoH = 360;
+  let videoRatio = 16 / 9;
+  let lockRatio = false; // 默认解锁，因为默认尺寸 150x150 不是视频原比例
+
+  let chroma = { r: 0, g: 255, b: 0 };
+  let similarity = 0.3;
+  let smoothness = 0.05;
+
+  let previewBgType = 'checker';
+  let previewBgColor = '#ff6b6b';
+
+  // 缩放/平移状态
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+  const MIN_SCALE = 1;
+  const MAX_SCALE = 8;
+  let badgeTimer = null;
+
+  // 手势
+  let pointerMode = 'none';
+  let startX = 0, startY = 0;
+  let startOffsetX = 0, startOffsetY = 0;
+  let pinchStartDist = 0;
+  let pinchStartScale = 1;
+  let pinchStartMidX = 0, pinchStartMidY = 0;
+  let pinchStartOffsetX = 0, pinchStartOffsetY = 0;
+  const activePointers = new Map();
+
+  function getVideo() {
+    if (video) return video;
+    video = document.createElement('video');
+    video.crossOrigin = 'anonymous';
+    video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+    video.muted = true;
+    video.preload = 'auto';
+    document.body.appendChild(video);
+    return video;
+  }
+
+  function hexToRgb(hex) {
+    const c = hex.replace('#', '');
+    return {
+      r: parseInt(c.substring(0, 2), 16),
+      g: parseInt(c.substring(2, 4), 16),
+      b: parseInt(c.substring(4, 6), 16)
+    };
+  }
+
+  function setChromaColor(hex) {
+    chroma = hexToRgb(hex);
+    chromaColorInput.value = hex;
+    colorSwatch.style.background = hex;
+    hexLabel.textContent = hex.toUpperCase();
+  }
+
+  // ===== 预览框比例跟随输出尺寸 =====
+  function updatePreviewAspect() {
+    const w = parseInt(widthInput.value, 10) || 150;
+    const h = parseInt(heightInput.value, 10) || 150;
+    const ratio = w / h;
+    canvasBox.style.aspectRatio = `${w} / ${h}`;
+    // 限制极端比例，避免预览框太小或太长
+    if (ratio > 4) {
+      canvasBox.style.maxHeight = '50vh';
+    } else if (ratio < 0.25) {
+      canvasBox.style.maxWidth = '50%';
+      canvasBox.style.margin = '0 auto';
+    } else {
+      canvasBox.style.maxHeight = '70vh';
+      canvasBox.style.maxWidth = '100%';
+    }
+    // 尺寸变了重绘
+    if (sourceLoaded) renderFrame();
+  }
+
+  widthInput.addEventListener('input', () => {
+    if (lockRatio) recalcHeightFromWidth();
+    updatePreviewAspect();
+  });
+  heightInput.addEventListener('input', () => {
+    if (lockRatio) recalcWidthFromHeight();
+    updatePreviewAspect();
+  });
+
+  // ===== 缩放指示 =====
+  function showZoomBadge() {
+    zoomBadge.textContent = Math.round(scale * 100) + '%';
+    zoomBadge.classList.add('show');
+    if (badgeTimer) clearTimeout(badgeTimer);
+    badgeTimer = setTimeout(() => {
+      zoomBadge.classList.remove('show');
+    }, 1200);
+  }
+
+  function resetTransform() {
+    scale = 1;
+    offsetX = 0;
+    offsetY = 0;
+    renderFrame();
+    showZoomBadge();
+  }
+
+  function clampOffsets() {
+    const rect = canvasBox.getBoundingClientRect();
+    // 缩小方向不允许（scale>=1），放大时画面可以移动的范围
+    const maxX = rect.width * (scale - 1) / 2;
+    const maxY = rect.height * (scale - 1) / 2;
+    offsetX = Math.max(-maxX, Math.min(maxX, offsetX));
+    offsetY = Math.max(-maxY, Math.min(maxY, offsetY));
+  }
+
+  zoomInBtn.addEventListener('click', () => {
+    scale = Math.min(MAX_SCALE, scale * 1.5);
+    clampOffsets();
+    renderFrame();
+    showZoomBadge();
+  });
+  zoomOutBtn.addEventListener('click', () => {
+    scale = Math.max(MIN_SCALE, scale / 1.5);
+    if (scale <= 1.001) { scale = 1; offsetX = 0; offsetY = 0; }
+    clampOffsets();
+    renderFrame();
+    showZoomBadge();
+  });
+  zoomResetBtn.addEventListener('click', resetTransform);
+
+  // ===== 手势 =====
+  canvasBox.addEventListener('pointerdown', (e) => {
+    if (!sourceLoaded) return;
+    if (e.target.closest('.zoom-controls')) return;
+
+    canvasBox.setPointerCapture(e.pointerId);
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointers.size === 1) {
+      pointerMode = 'pan';
+      startX = e.clientX;
+      startY = e.clientY;
+      startOffsetX = offsetX;
+      startOffsetY = offsetY;
+      canvasBox.classList.add('dragging');
+    } else if (activePointers.size === 2) {
+      pointerMode = 'pinch';
+      const pts = Array.from(activePointers.values());
+      const dx = pts[0].x - pts[1].x;
+      const dy = pts[0].y - pts[1].y;
+      pinchStartDist = Math.sqrt(dx * dx + dy * dy);
+      pinchStartScale = scale;
+      pinchStartMidX = (pts[0].x + pts[1].x) / 2;
+      pinchStartMidY = (pts[0].y + pts[1].y) / 2;
+      pinchStartOffsetX = offsetX;
+      pinchStartOffsetY = offsetY;
+      canvasBox.classList.remove('dragging');
+    }
+  });
+
+  canvasBox.addEventListener('pointermove', (e) => {
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointerMode === 'pan' && activePointers.size === 1) {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (scale > 1.01) {
+        offsetX = startOffsetX + dx;
+        offsetY = startOffsetY + dy;
+        clampOffsets();
+        renderFrame();
+      }
+    } else if (pointerMode === 'pinch' && activePointers.size >= 2) {
+      const pts = Array.from(activePointers.values()).slice(0, 2);
+      const dx = pts[0].x - pts[1].x;
+      const dy = pts[0].y - pts[1].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const midX = (pts[0].x + pts[1].x) / 2;
+      const midY = (pts[0].y + pts[1].y) / 2;
+
+      if (pinchStartDist > 0) {
+        const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, pinchStartScale * (dist / pinchStartDist)));
+
+        const rect = canvasBox.getBoundingClientRect();
+        const boxCx = rect.width / 2;
+        const boxCy = rect.height / 2;
+        const cx = midX - rect.left;
+        const cy = midY - rect.top;
+        const offsetFromCenterX = cx - boxCx;
+        const offsetFromCenterY = cy - boxCy;
+
+        const ratio = newScale / pinchStartScale;
+        offsetX = (cx - boxCx) - offsetFromCenterX * ratio + (midX - pinchStartMidX);
+        offsetY = (cy - boxCy) - offsetFromCenterY * ratio + (midY - pinchStartMidY);
+
+        scale = newScale;
+        clampOffsets();
+        renderFrame();
+        showZoomBadge();
+      }
+    }
+  });
+
+  function endPointer(e) {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size === 0) {
+      pointerMode = 'none';
+      canvasBox.classList.remove('dragging');
+    } else if (activePointers.size === 1) {
+      pointerMode = 'pan';
+      const p = Array.from(activePointers.values())[0];
+      startX = p.x;
+      startY = p.y;
+      startOffsetX = offsetX;
+      startOffsetY = offsetY;
+    }
+  }
+
+  canvasBox.addEventListener('pointerup', endPointer);
+  canvasBox.addEventListener('pointercancel', endPointer);
+  canvasBox.addEventListener('pointerleave', (e) => {
+    if (activePointers.has(e.pointerId)) endPointer(e);
+  });
+
+  // 滚轮缩放
+  canvasBox.addEventListener('wheel', (e) => {
+    if (!sourceLoaded) return;
+    e.preventDefault();
+    const rect = canvasBox.getBoundingClientRect();
+    const boxCx = rect.width / 2;
+    const boxCy = rect.height / 2;
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const offsetFromCenterX = cx - boxCx;
+    const offsetFromCenterY = cy - boxCy;
+
+    const factor = e.deltaY < 0 ? 1.15 : 0.87;
+    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * factor));
+    const ratio = newScale / scale;
+
+    offsetX = (cx - boxCx) - offsetFromCenterX * ratio;
+    offsetY = (cy - boxCy) - offsetFromCenterY * ratio;
+    scale = newScale;
+    if (scale <= 1.001) { scale = 1; offsetX = 0; offsetY = 0; }
+    clampOffsets();
+    renderFrame();
+    showZoomBadge();
+  }, { passive: false });
+
+  // 双击重置
+  let lastTapTime = 0;
+  canvasBox.addEventListener('click', (e) => {
+    if (e.target.closest('.zoom-controls')) return;
+    const now = Date.now();
+    if (now - lastTapTime < 300) resetTransform();
+    lastTapTime = now;
+  });
+
+  // ===== 预览背景 =====
+  function applyPreviewBg() {
+    let bgColor = 'transparent';
+    let bgImage = 'none';
+    let bgSize = 'auto';
+    let bgPos = '0 0';
+
+    if (previewBgType === 'checker') {
+      bgColor = 'var(--checker-b)';
+      bgImage = `linear-gradient(45deg, var(--checker-a) 25%, transparent 25%),
+                 linear-gradient(-45deg, var(--checker-a) 25%, transparent 25%),
+                 linear-gradient(45deg, transparent 75%, var(--checker-a) 75%),
+                 linear-gradient(-45deg, transparent 75%, var(--checker-a) 75%)`;
+      bgSize = '18px 18px';
+      bgPos = '0 0, 0 9px, 9px -9px, -9px 0px';
+    } else if (previewBgType === 'white') bgColor = '#ffffff';
+    else if (previewBgType === 'black') bgColor = '#000000';
+    else if (previewBgType === 'green') bgColor = '#00b140';
+    else if (previewBgType === 'blue') bgColor = '#0066ff';
+    else if (previewBgType === 'magenta') bgColor = '#ff00ff';
+    else if (previewBgType === 'custom') bgColor = previewBgColor;
+
+    previewWrap.style.setProperty('--preview-bg', bgColor);
+    previewWrap.style.setProperty('--preview-bg-image', bgImage);
+    previewWrap.style.setProperty('--preview-bg-size', bgSize);
+    previewWrap.style.setProperty('--preview-bg-pos', bgPos);
+  }
+
+  document.querySelectorAll('.bg-opt').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const bg = btn.dataset.bg;
+      if (bg === 'custom') { customBgColor.click(); return; }
+      document.querySelectorAll('.bg-opt').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      previewBgType = bg;
+      applyPreviewBg();
+    });
+  });
+
+  customBgColor.addEventListener('input', (e) => {
+    previewBgColor = e.target.value;
+    previewBgType = 'custom';
+    document.querySelectorAll('.bg-opt').forEach(b => b.classList.remove('selected'));
+    customBgBtn.classList.add('selected');
+    customBgBtn.style.background = previewBgColor;
+    applyPreviewBg();
+  });
+
+  applyPreviewBg();
+
+  // ===== 尺寸逻辑 =====
+  function recalcHeightFromWidth() {
+    if (!lockRatio) return;
+    const w = parseInt(widthInput.value, 10);
+    if (!w || w < 8) return;
+    const h = Math.max(1, Math.round(w / videoRatio));
+    heightInput.value = h;
+  }
+  function recalcWidthFromHeight() {
+    if (!lockRatio) return;
+    const h = parseInt(heightInput.value, 10);
+    if (!h || h < 8) return;
+    const w = Math.max(1, Math.round(h * videoRatio));
+    widthInput.value = w;
+  }
+  function updateRatioLockUI() {
+    if (lockRatio) {
+      lockRatioBtn.classList.add('active');
+      lockRatioBtn.textContent = '🔒';
+      lockRatioBtn.title = '已锁定比例';
+    } else {
+      lockRatioBtn.classList.remove('active');
+      lockRatioBtn.textContent = '🔓';
+      lockRatioBtn.title = '未锁定';
+    }
+  }
+  lockRatioBtn.addEventListener('click', () => {
+    lockRatio = !lockRatio;
+    updateRatioLockUI();
+    if (lockRatio) { recalcHeightFromWidth(); updatePreviewAspect(); }
+  });
+
+  document.querySelectorAll('.size-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const w = parseInt(btn.dataset.w, 10);
+      const h = parseInt(btn.dataset.h, 10);
+      if (w === 0 && h === 0) {
+        if (sourceLoaded) {
+          widthInput.value = videoW;
+          heightInput.value = videoH;
+          updatePreviewAspect();
+        }
+        return;
+      }
+      lockRatio = false;
+      updateRatioLockUI();
+      widthInput.value = w;
+      heightInput.value = h;
+      updatePreviewAspect();
+    });
+  });
+
+  // ===== 取色 =====
+  chromaColorInput.addEventListener('input', (e) => {
+    setChromaColor(e.target.value);
+    renderFrame();
+  });
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setChromaColor(btn.dataset.color);
+      renderFrame();
+    });
+  });
+
+  similaritySlider.addEventListener('input', (e) => {
+    similarity = parseFloat(e.target.value);
+    simVal.textContent = similarity.toFixed(2);
+    renderFrame();
+  });
+  smoothnessSlider.addEventListener('input', (e) => {
+    smoothness = parseFloat(e.target.value);
+    smoothVal.textContent = smoothness.toFixed(2);
+    renderFrame();
+  });
+
+  setChromaColor('#00ff00');
+  updateRatioLockUI();
+  updatePreviewAspect();
+
+  // ===== 抠图 =====
+  function chromaKey(sourceCanvas) {
+    const w = sourceCanvas.width;
+    const h = sourceCanvas.height;
+    const srcCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+    const frame = srcCtx.getImageData(0, 0, w, h);
+    const data = frame.data;
+
+    const { r: kr, g: kg, b: kb } = chroma;
+    const maxDist = Math.sqrt(3) * 255;
+    const threshold = similarity * maxDist;
+    const smoothRange = smoothness * maxDist * 0.5;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const dr = r - kr, dg = g - kg, db = b - kb;
+      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+      let alpha = 255;
+      if (dist < threshold) alpha = 0;
+      else if (smoothRange > 0 && dist < threshold + smoothRange) {
+        alpha = Math.round(((dist - threshold) / smoothRange) * 255);
+      }
+      data[i + 3] = alpha;
+    }
+    return frame;
+  }
+
+  function getOutputSize() {
+    let w = parseInt(widthInput.value, 10);
+    let h = parseInt(heightInput.value, 10);
+    if (!w || w < 8) w = 150;
+    if (!h || h < 8) h = 150;
+    return { w: Math.min(w, 4000), h: Math.min(h, 4000) };
+  }
+
+  // 等比例缩放居中
+  function drawScaledContain(srcCanvas, dstCanvas) {
+    const sw = srcCanvas.width;
+    const sh = srcCanvas.height;
+    const dw = dstCanvas.width;
+    const dh = dstCanvas.height;
+    const s = Math.min(dw / sw, dh / sh);
+    const rw = Math.max(1, Math.round(sw * s));
+    const rh = Math.max(1, Math.round(sh * s));
+    const dx = Math.floor((dw - rw) / 2);
+    const dy = Math.floor((dh - rh) / 2);
+    const dctx = dstCanvas.getContext('2d');
+    dctx.imageSmoothingEnabled = true;
+    dctx.imageSmoothingQuality = 'high';
+    dctx.clearRect(0, 0, dw, dh);
+    dctx.drawImage(srcCanvas, 0, 0, sw, sh, dx, dy, rw, rh);
+  }
+
+  // 生成一帧「输出尺寸」的抠图画面（带缩放/平移应用到输出上）
+  // 逻辑：以输出尺寸为基准画布，把原始抠图按 contain 铺满，然后应用 scale 和 offset
+  // 这样导出时跟预览看到的一致
+  function renderKeyedOutputFrame(targetW, targetH, applyZoom) {
+    // 1. 原始帧抠图
+    const frameCanvas = document.createElement('canvas');
+    frameCanvas.width = video.videoWidth || videoW;
+    frameCanvas.height = video.videoHeight || videoH;
+    const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+    fctx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
+
+    const keyed = chromaKey(frameCanvas);
+    const midCanvas = document.createElement('canvas');
+    midCanvas.width = frameCanvas.width;
+    midCanvas.height = frameCanvas.height;
+    midCanvas.getContext('2d').putImageData(keyed, 0, 0);
+
+    // 2. 输出画布
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = targetW;
+    outCanvas.height = targetH;
+    const octx = outCanvas.getContext('2d');
+    octx.imageSmoothingEnabled = true;
+    octx.imageSmoothingQuality = 'high';
+
+    // 3. 计算 contain 到输出的显示尺寸
+    const s = Math.min(targetW / midCanvas.width, targetH / midCanvas.height);
+    const baseW = midCanvas.width * s;
+    const baseH = midCanvas.height * s;
+
+    // 4. 应用缩放（缩放应用到输出画布上）
+    // 预览中的 offsetX/offsetY 是基于 canvasBox 像素的，需要换算到输出画布坐标
+    // 预览的 viewW = canvasBox 宽度，输出画布 targetW
+    // 比例 = targetW / viewW （近似）
+    let dispW = baseW;
+    let dispH = baseH;
+    let drawX = (targetW - dispW) / 2;
+    let drawY = (targetH - dispH) / 2;
+
+    if (applyZoom && scale > 1) {
+      dispW = baseW * scale;
+      dispH = baseH * scale;
+
+      // 把预览偏移换算到输出坐标
+      const rect = canvasBox.getBoundingClientRect();
+      const viewW = rect.width || targetW;
+      const viewH = rect.height || targetH;
+      const kx = targetW / viewW;
+      const ky = targetH / viewH;
+
+      drawX = (targetW - dispW) / 2 + offsetX * kx;
+      drawY = (targetH - dispH) / 2 + offsetY * ky;
+    }
+
+    octx.clearRect(0, 0, targetW, targetH);
+    octx.drawImage(midCanvas, drawX, drawY, dispW, dispH);
+
+    return outCanvas;
+  }
+
+  // ===== 预览渲染 =====
+  function renderFrame() {
+    if (!video || !sourceLoaded || video.readyState < 2) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+
+    // 预览画布尺寸 = canvasBox 实际像素
+    const rect = canvasBox.getBoundingClientRect();
+    const viewW = Math.max(1, Math.round(rect.width));
+    const viewH = Math.max(1, Math.round(rect.height));
+
+    if (canvas.width !== viewW || canvas.height !== viewH) {
+      canvas.width = viewW;
+      canvas.height = viewH;
+    }
+
+    ctx.clearRect(0, 0, viewW, viewH);
+
+    // 生成一帧以「输出尺寸」为基准的画面（含缩放平移）
+    const { w: outW, h: outH } = getOutputSize();
+    const outFrame = renderKeyedOutputFrame(outW, outH, true);
+
+    // 把输出画面铺到预览 canvas
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(outFrame, 0, 0, outW, outH, 0, 0, viewW, viewH);
+  }
+
+  // ===== 播放 =====
+  function loop() {
+    if (!video || video.paused || video.ended) {
+      isPlaying = false;
+      playPauseBtn.textContent = '▶ 播放透明预览';
+      animationFrameId = null;
+      return;
+    }
+    renderFrame();
+    animationFrameId = requestAnimationFrame(loop);
+  }
+
+  function play() {
+    if (!video || !sourceLoaded) return;
+    if (video.ended) video.currentTime = 0;
+    const p = video.play();
+    if (p && p.catch) p.catch(() => {});
+    isPlaying = true;
+    playPauseBtn.textContent = '⏸ 暂停预览';
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    loop();
+  }
+
+  function pause() {
+    if (video && !video.paused) video.pause();
+    isPlaying = false;
+    playPauseBtn.textContent = '▶ 播放透明预览';
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+  }
+
+  playPauseBtn.addEventListener('click', () => {
+    if (!video || !sourceLoaded) return;
+    isPlaying ? pause() : play();
+  });
+
+  // ===== 文件选择 =====
+  videoInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    if (video) {
+      try { video.pause(); } catch (err) {}
+      video.removeAttribute('src');
+      try { video.load(); } catch (err) {}
+    }
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+    isPlaying = false;
+    playPauseBtn.textContent = '▶ 播放透明预览';
+    sourceLoaded = false;
+    playPauseBtn.disabled = true;
+    exportBtn.disabled = true;
+    exportStatus.textContent = '';
+    exportStatus.className = 'status';
+    frameInfo.textContent = '';
+    warnBox.style.display = 'none';
+    previewHint.style.display = 'flex';
+
+    scale = 1; offsetX = 0; offsetY = 0;
+
+    statusMsg.textContent = '正在加载视频…';
+    statusMsg.className = 'status';
+
+    const v = getVideo();
+    const url = URL.createObjectURL(file);
+
+    v.onloadedmetadata = () => {
+      videoW = v.videoWidth;
+      videoH = v.videoHeight;
+      if (!videoW || !videoH) {
+        statusMsg.textContent = '❌ 无法读取视频尺寸';
+        statusMsg.className = 'status error';
+        return;
+      }
+      videoRatio = videoW / videoH;
+      // 视频加载后，不自动改用户填的尺寸（默认保持 150×150）
+      sourceLoaded = true;
+      playPauseBtn.disabled = false;
+      exportBtn.disabled = false;
+      previewHint.style.display = 'none';
+      statusMsg.textContent = `✅ 已加载：${videoW}×${videoH}，时长 ${v.duration.toFixed(1)}s`;
+      statusMsg.className = 'status ok';
+      v.currentTime = 0;
+      updatePreviewAspect();
+    };
+
+    v.onseeked = () => { renderFrame(); };
+
+    v.onerror = () => {
+      statusMsg.textContent = '❌ 视频加载失败（推荐 MP4/H.264）';
+      statusMsg.className = 'status error';
+      sourceLoaded = false;
+      playPauseBtn.disabled = true;
+      exportBtn.disabled = true;
+      URL.revokeObjectURL(url);
+    };
+
+    v.src = url;
+    v.load();
+
+    setTimeout(() => { e.target.value = ''; }, 300);
+  });
+
+  function seekTo(time) {
+    return new Promise((resolve) => {
+      if (!video) return resolve();
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        video.removeEventListener('seeked', finish);
+        resolve();
+      };
+      video.addEventListener('seeked', finish);
+      setTimeout(finish, 800);
+      try {
+        video.currentTime = Math.min(time, video.duration - 0.001);
+      } catch (e) { finish(); }
+    });
+  }
+
+  // ===== 导出 GIF =====
+  async function exportGif() {
+    if (!video || !sourceLoaded) return;
+    if (typeof GIF === 'undefined') {
+      exportStatus.textContent = '❌ GIF 库未加载，请刷新页面';
+      exportStatus.className = 'status error';
+      return;
+    }
+
+    const { w: outW, h: outH } = getOutputSize();
+
+    if (outW * outH > 1000000) {
+      const ok = confirm(`输出尺寸 ${outW}×${outH} 较大（约 ${(outW*outH/1000000).toFixed(2)} 百万像素），手机可能很慢或崩溃。确定继续吗？`);
+      if (!ok) return;
+    }
+
+    pause();
+    exportBtn.disabled = true;
+    playPauseBtn.disabled = true;
+    progressBar.classList.add('show');
+    progressFill.style.width = '0%';
+    exportStatus.textContent = '准备中…';
+    exportStatus.className = 'status';
+
+    const fps = parseFloat(fpsSelect.value) || 10;
+    const maxFrames = parseInt(maxFramesSelect.value, 10);
+    const useDither = ditherChk.checked;
+    const alphaCut = parseInt(alphaThreshold.value, 10);
+
+    const duration = video.duration;
+    let totalFrames = Math.max(1, Math.floor(duration * fps));
+    if (maxFrames > 0 && totalFrames > maxFrames) totalFrames = maxFrames;
+
+    const frameDelay = Math.round(1000 / fps);
+
+    let gif;
+    try {
+      const workerBlob = new Blob([
+        `importScripts('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');`
+      ], { type: 'application/javascript' });
+      const workerUrl = URL.createObjectURL(workerBlob);
+
+      gif = new GIF({
+        workers: 2, quality: 10, width: outW, height: outH,
+        workerScript: workerUrl, transparent: 'rgba(0,0,0,0)',
+        dither: useDither ? 'FloydSteinberg' : false, repeat: 0
+      });
+    } catch (err) {
+      console.error('GIF 创建失败', err);
+      exportStatus.textContent = '❌ GIF 初始化失败：' + err.message;
+      exportStatus.className = 'status error';
+      exportBtn.disabled = false;
+      playPauseBtn.disabled = false;
+      return;
+    }
+
+    for (let i = 0; i < totalFrames; i++) {
+      const t = i / fps;
+      await seekTo(t);
+
+      // 生成一帧输出画面（应用当前的缩放/平移）
+      const outFrame = renderKeyedOutputFrame(outW, outH, true);
+      const octx = outFrame.getContext('2d', { willReadFrequently: true });
+
+      // Alpha 二值化
+      const imgData = octx.getImageData(0, 0, outW, outH);
+      const d = imgData.data;
+      for (let j = 3; j < d.length; j += 4) {
+        d[j] = d[j] < alphaCut ? 0 : 255;
+      }
+      octx.putImageData(imgData, 0, 0);
+
+      gif.addFrame(octx, { delay: frameDelay, copy: true });
+
+      const pct = Math.round(((i + 1) / totalFrames) * 50);
+      progressFill.style.width = pct + '%';
+      exportStatus.textContent = `提取帧 ${i + 1}/${totalFrames}（${outW}×${outH}）…`;
+
+      if (i % 3 === 0) await new Promise(r => setTimeout(r, 0));
+    }
+
+    exportStatus.textContent = '正在编码 GIF（请耐心等待）…';
+    progressFill.style.width = '55%';
+
+    let encodeProgress = 55;
+    const heartbeat = setInterval(() => {
+      if (encodeProgress < 95) {
+        encodeProgress += 0.5;
+        progressFill.style.width = encodeProgress + '%';
+      }
+    }, 500);
+
+    gif.on('progress', (p) => {
+      const pct = 55 + Math.round(p * 40);
+      progressFill.style.width = pct + '%';
+      exportStatus.textContent = `编码中 ${Math.round(p * 100)}%…`;
+    });
+
+    gif.on('finished', (blob) => {
+      clearInterval(heartbeat);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `transparent_${outW}x${outH}_${Date.now()}.gif`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+
+      progressFill.style.width = '100%';
+      exportStatus.textContent = `✅ 完成！${outW}×${outH} · ${totalFrames} 帧 · ${(blob.size / 1024).toFixed(0)} KB`;
+      exportStatus.className = 'status ok';
+      exportBtn.disabled = false;
+      playPauseBtn.disabled = false;
+      setTimeout(() => {
+        progressBar.classList.remove('show');
+        progressFill.style.width = '0%';
+      }, 2000);
+
+      video.currentTime = 0;
+    });
+
+    gif.on('error', (err) => {
+      clearInterval(heartbeat);
+      console.error('GIF 错误', err);
+      exportStatus.textContent = '❌ 合成失败：' + err;
+      exportStatus.className = 'status error';
+      exportBtn.disabled = false;
+      playPauseBtn.disabled = false;
+      progressBar.classList.remove('show');
+    });
+
+    gif.render();
+  }
+
+  exportBtn.addEventListener('click', exportGif);
+
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (sourceLoaded) renderFrame();
+    }, 150);
+  });
+
+  window.addEventListener('beforeunload', () => {
+    if (video) {
+      try { video.pause(); } catch (e) {}
+      video.removeAttribute('src');
+      try { video.load(); } catch (e) {}
+    }
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+  });
+})();
+</script>
+</body>
+</html>
